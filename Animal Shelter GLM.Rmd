@@ -1,0 +1,530 @@
+---
+title: "Animal Shelter GLM"
+author: "Anna Kotlan"
+date: "2024-10-29"
+output: word_document
+---
+
+# Task 1
+## Packages
+```{r, warning = FALSE, message=FALSE}
+library(ggplot2)
+library(dplyr)
+library(gridExtra)
+library(reshape2)
+library(lubridate)
+library(tidyr)
+library(MASS)
+library(car)
+```
+
+## Loading in Dataset
+```{r}
+dat <- read.csv("C:/Users/Anna Kotlan/OneDrive/Documents/Bentley/4 - Fall 2024/MA 380 (Linear Models & Survival Analysis)/animalshelterdata.csv")
+```
+
+## Defining Variables
+```{r}
+for (column_name in colnames(dat)) {
+  data_type <- class(dat[[column_name]])
+  unique_values <- sort(unique(dat[[column_name]]))
+  unique_count <- length(unique_values)
+  
+  cat(column_name, ": Data Type:", data_type, ", Unique Count:", unique_count, "\n")
+  
+  if (unique_count < 13) {
+    cat("Unique Values:", paste(unique_values, collapse = ", "), "\n")
+  } else if (data_type != "character") {
+    cat("Unique Values: Range:", min(unique_values), ".....", max(unique_values), "\n")
+  }
+  
+  cat("\n") 
+}
+```
+
+- The variable "outcome" indicates how an animal left the shelter, either being transferred to another facility (often when the shelter was filling up), adopted by a new owner, or returned to its original owner (often when animal went missing). This is a nominal categorical variable with 3 levels.
+
+- The variable "length of stay" indicates the length of stay (measured in days) an animal remained in the shelter. This is a discrete numeric variable.
+
+- The variable "animal" indicates the taxonomic family of an animal, either being cat or a dog. This is a nominal categorical variable with 2 levels.
+
+- The variable "mf" indicates the animal's sex, either being male or female. This is a nominal categorical variable with 2 levels.
+ 
+- The variable "age" indicates the animal's (measured in years) at the time it came into the shelter. *If an animal was born at the shelter their “age” is set to a negative value*. This is a continuous numeric variable.
+
+- The variable "in.month" indicates the month an animal came into the shelter. This is an ordinal categorical variable, with 12 levels. 
+
+- The variable "in.year" indicates the year an animal came into the shelter. This is a discrete numeric variable.
+
+- The variable "out.month" indicates the month an animal left the shelter. This is an ordinal categorical variable, with 12 levels.
+
+- The variable "out.year" indicates the year an animal left the shelter. This is a discrete numeric variable.
+
+- The variable "in.reason" indicates the reason an animal came in, either being brought because the owner surrendered it (often due to the owners' inabililty to care for it), brought through public assist (often for abused animals), or brought as a stray. This is a nominal categorical variable with 3 levels.
+
+- The variable "in.intact" indicates an animal's ability to have offspring at the time it came into the shelter. This is a nominal categorical variable with 2 levels.
+
+- The variable "out.intact" indicates an animal's ability to have offspring at the time it left the shelter. This is a nominal categorical variable with 2 levels.
+
+- The variable "breed" indicates an animal's breed. This is a nominal categorical variable with 1727 levels (due to poor data collection). 
+
+- The variable "color" indicates an animal's color. This is a nominal categorical variable with 429 levels (due to poor data collection). 
+
+
+# Task 2
+## Adding / Modifying Variables 
+### Occupancy Dataframe
+```{r}
+# convert in.year, in.month, out.year, out.month to date objects
+dat$in.date <- as.Date(paste(dat$in.year, dat$in.month, "01", sep = "-"), format = "%Y-%m-%d")
+dat$out.date <- as.Date(paste(dat$out.year, dat$out.month, "01", sep = "-"), format = "%Y-%m-%d")
+
+monthly_dates <- seq.Date(from = as.Date(cut(min(dat$in.date), "month")), 
+                          to = as.Date(cut(max(dat$out.date), "month")), 
+                          by = "month")
+
+# dataframe for occupancy data
+occupancy_dat <- data.frame(
+  date = monthly_dates,  
+  peak_dip = NA_character_, 
+  in.reason_surrender = NA_real_,  
+  in.reason_assist = NA_real_,     
+  in.reason_stray = NA_real_,      
+  outcome_adoption = NA_real_,     
+  outcome_return = NA_real_,       
+  outcome_transfer = NA_real_      
+)
+
+# peak and dip dates
+peak_dates <- as.Date(c('2015-06-01', '2016-05-01', '2017-07-01', '2018-07-01', '2019-06-01', '2020-10-01')) 
+dip_dates <- as.Date(c('2016-02-01', '2017-03-01', '2018-02-01', '2019-02-01', '2020-04-01'))
+
+# loop to fill in the occupancy data
+for (i in 1:nrow(occupancy_dat)) {
+  start_of_month <- occupancy_dat$date[i]
+  end_of_month <- as.Date(format(start_of_month, "%Y-%m-%d")) + months(1) - days(1)
+
+  # Count of records within the timeframe
+  occupancy_dat$count_within_timeframe[i] <- sum(
+    dat$in.date <= end_of_month & dat$out.date >= start_of_month
+  )
+  
+  # Count of records where the date matches exactly and reason is "Owner Surrender"
+  occupancy_dat$in.reason_surrender[i] <- sum(
+    dat$in.date == occupancy_dat$date[i] & dat$in.reason == "Owner Surrender"
+  )
+  
+  # Count of records where the date matches exactly and reason is "Public Assist"
+  occupancy_dat$in.reason_assist[i] <- sum(
+    dat$in.date == occupancy_dat$date[i] & dat$in.reason == "Public Assist"
+  )
+  
+  # Count of records where the date matches exactly and reason is "Stray"
+  occupancy_dat$in.reason_stray[i] <- sum(
+    dat$in.date == occupancy_dat$date[i] & dat$in.reason == "Stray"
+  )
+  
+  # Count of records where the date matches exactly and outcome is "Adoption"
+  occupancy_dat$outcome_adoption[i] <- sum(
+    dat$out.date == occupancy_dat$date[i] & dat$outcome == "Adoption"
+  )
+  
+  # Count of records where the date matches exactly and outcome is "Return to Owner"
+  occupancy_dat$outcome_return[i] <- sum(
+    dat$out.date == occupancy_dat$date[i] & dat$outcome == "Return to Owner"
+  )
+  
+  # Count of records where the date matches exactly and outcome is "Transfer"
+  occupancy_dat$outcome_transfer[i] <- sum(
+    dat$out.date == occupancy_dat$date[i] & dat$outcome == "Transfer"
+  )
+}
+
+# assign Peak or Dip status based on dates
+occupancy_dat$peak_dip <- ifelse(occupancy_dat$date %in% peak_dates, "Peak", 
+                                  ifelse(occupancy_dat$date %in% dip_dates, "Dip", NA))
+
+# create in.reason difference column
+occupancy_dat$in.reason_returning <- occupancy_dat$count_within_timeframe - rowSums(occupancy_dat[, grepl("in.reason", names(occupancy_dat))])
+
+# transform data to long
+occupancy_long_in <- occupancy_dat %>%
+  pivot_longer(cols = starts_with("in.reason"), names_to = "reason", values_to = "count") %>%
+  dplyr::select(date, peak_dip, reason, count)
+```
+
+### Intact, Month, and Year Variables
+```{r}
+# add intact_factor variable, converting intact variable into factor
+dat$in.intact <- as.factor(dat$in.intact)
+dat$out.intact <- as.factor(dat$out.intact)
+
+# add month_factor variable, converting month variable into factor
+dat$in.month_factor <- as.factor(dat$in.month)
+dat$out.month_factor <- as.factor(dat$out.month)
+
+# add year_factor variable, converting year variable into factor
+dat$in.year_factor <- as.factor(dat$in.year)
+dat$out.year_factor <- as.factor(dat$out.year)
+```
+
+### Age Variables
+```{r}
+# add age_group variable, breaking up age variable into groups
+dat <- dat %>%
+  mutate(age_group = cut(age, 
+                         breaks = c(-0.1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25),
+                         labels = c("Born in Shelter", "[0, 1)", "[1, 2)", "[2, 3)", "[3, 4)", "[4, 5)", "[5, 6)", "[6, 7)", "[7, 8)", "[8, 9)", "[9, 10)", "[10, 11)", "[11, 12)", "[12, 13)", "[13, 14)", "[14, 15)", "[15, 16)", "[16, 17)", "[17, 18)", "[18, 19)", "[19, 20)", "[20, 21)", "[21, 22)", "[22, 23)", "[23, 24)", "[24, 25)"),
+                         right = FALSE)) 
+
+# add binary born_in_shelter variable, if age variable is = -0.1 (aka. born in shelter)
+dat$born_in_shelter <- ifelse(dat$age == -0.1, 1, 0)
+dat$born_in_shelter <- as.factor(dat$born_in_shelter)
+```
+
+### Color Variables
+```{r}
+# unique colors
+unique_colors <- unlist(strsplit(dat$color, "[ /]+"))
+color_df <- data.frame(Color = unique(unique_colors))
+
+# median stays, differences, and percent positives
+color_df$MedianStay <- sapply(color_df$Color, function(b) median(dat[grepl(b, dat$color, ignore.case = TRUE), "stay"]))
+color_df$StayDiff <- abs(color_df$MedianStay - median(dat$stay))
+color_df$PosPercent <- sapply(color_df$Color, function(b) sum(grepl(b, dat$color, ignore.case = TRUE)) / nrow(dat) * 100) 
+
+# top colors with largest differences
+#color_df[order(-color_df$StayDiff), ] # sorted by difference
+#unique(dat$color[grepl("tabby", dat$color, ignore.case = TRUE)]) #review if "tabby" categorization is meaningful
+
+# add binary tabby variable, if breed variable contains the word "tabby"
+dat$tabby <- ifelse(grepl("tabby", dat$color, ignore.case = TRUE), 1, 0)
+dat$tabby <- as.factor(dat$tabby)
+```
+
+### Breed Variables
+```{r}
+# unique breeds
+unique_breeds <- unlist(strsplit(dat$breed, "[ /]+"))
+breed_df <- data.frame(Breed = unique(unique_breeds))
+
+# median stays, differences, and percent positives
+breed_df$MedianStay <- sapply(breed_df$Breed, function(b) median(dat[grepl(b, dat$breed, ignore.case = TRUE), "stay"]))
+breed_df$StayDiff <- abs(breed_df$MedianStay - median(dat$stay))
+breed_df$PosPercent <- sapply(breed_df$Breed, function(b) sum(grepl(b, dat$breed, ignore.case = TRUE)) / nrow(dat) * 100)
+
+# top breeds with largest differences
+#breed_df[order(-breed_df$StayDiff), ] # sorted by difference
+#unique(dat$breed[grepl("domestic", dat$breed, ignore.case = TRUE)]) # review if "domestic" categorization is meaningful
+
+# add binary domestic variable, if breed variable contains the word "domestic"
+dat$domestic <- ifelse(grepl("domestic", dat$breed, ignore.case = TRUE), 1, 0)
+dat$domestic <- as.factor(dat$domestic)
+```
+
+## Remove Outliers for Cleaner Boxplots
+```{r}
+Q1 <- quantile(dat$stay, 0.25)
+Q3 <- quantile(dat$stay, 0.75)
+IQR_value <- IQR(dat$stay)
+
+lower_bound <- Q1 - 1.5 * IQR_value
+upper_bound <- Q3 + 1.5 * IQR_value
+
+dat_no_out <- dat[dat$stay >= lower_bound & dat$stay <= upper_bound, ]
+```
+
+## Boxplot for All Numeric and Ordinal Cateogrical Variables
+```{r, warning=FALSE}
+variables <- c("age_group", "in.month_factor", "in.year_factor", "out.month_factor", "out.year_factor")
+for (var in variables) {
+  p <- ggplot(dat_no_out, aes_string(x = var, y = "stay")) + 
+    geom_boxplot() +
+    labs(x = var, y = "stay", title = paste("stay vs", var)) +
+    theme_minimal()
+  #print(p) commented out for clarity of report
+}
+```
+
+## Boxplot for All Nominal Cateogrical Variables
+```{r, warning=FALSE}
+variables <- c("outcome", "animal", "mf", "in.reason", "in.intact", "out.intact", "born_in_shelter", "tabby", "domestic")
+for (var in variables) {
+  p <- ggplot(dat_no_out, aes_string(x = var, y = "stay")) + 
+    geom_boxplot() +
+    labs(x = var, y = "stay", title = paste("stay vs", var)) +
+    theme_minimal()
+  #print(p) commented out for clarity of report
+}
+```
+
+## Graphs and Modeling Decisions
+### 1. "Year" Predictor
+It would be interesting to explore the difference between treating "year" as a numeric vs categorical variable for our model. If treated as a numeric variable, this suggests that the length of stay may change continuously over time, with the year acting as a predictor of either an increase or decrease in the length of stay. If treated as a categorical variable, this suggests that each year may have a distinct effect on the length of stay, with no assumption of a continuous trend. Below is an example of the boxplot for 'out.year_factor':"
+
+```{r}
+ggplot(dat_no_out, aes_string(x = "out.year_factor", y = "stay")) + 
+  geom_boxplot() +
+  labs(x = "Year Leaving", y = "Stay (days)", 
+       title = "Stay vs Year of Leaving") +
+  theme_minimal()
+```
+
+### 2. "Born in Shelter" Predictor
+When creating a scatterplot of length of stay vs. age, it can be difficult to identify a clear best fit line due to potential non-linear relationships or outliers. For purely visual purposes, grouping age into categories and using boxplots allows us to better visualize the relationship—specifically, how the medians and variances of length of stay change with age. 
+
+A binary variable, 'Born in Shelter,' could be an interesting predictor to consider in our model for several reasons:
+
+1. There may be contextual significance associated with being born in a shelter, such as potential correlations with health complications, adopters preferring whole litters, or less socially developed animals.
+2. The median length of stay for animals born in shelters is significantly higher than for those who were not. However, this predictor might introduce bias due to the small sample size, as there are only 8 instances of animals born in shelters.
+
+```{r}
+p1 <- ggplot(dat_no_out, aes_string(x = "age_group", y = "stay")) + 
+  geom_boxplot() +
+  labs(x = "Age Group at Entry (years)", y = "Stay (days)", title = "Stay vs Age at Entry") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+p2 <- ggplot(dat_no_out, aes_string(x = "born_in_shelter", y = "stay")) + 
+  geom_boxplot() +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  labs(x = "Born in Shelter", y = "Stay (days)", title = "Stay vs Born in Shelter") +
+  theme_minimal()
+
+grid.arrange(p1, p2, ncol = 2, widths = c(15, 7))
+```
+
+### 3. "Tabby" Predictor 
+The "Color" variable has too many levels (due to poor data collection) to be included in the model. Of those levels, there are 34 unique colors. Ideally, we would consolidate the colors into larger groups based on commonalities, but the unique colors are too disorganized to do that. Instead, I looked at the median length of stay for each color, and noticed that the "tabby" color has one of the greatest differences from the median length of stay, while maintaining a large enough sample size. I also examined unique records of "tabby" to make sure that the categorization was meaningful. Therefore, a solution could be to utilize a binary predictor like "tabby" for the model.   
+
+```{r}
+head(color_df[order(-color_df$StayDiff), ])
+head(unique(dat$color[grepl("tabby", dat$color, ignore.case = TRUE)]), 10)
+```
+```{r}
+ggplot(dat_no_out, aes_string(x = "tabby", y = "stay")) + 
+  geom_boxplot() +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  labs(x = "Color Contains Tabby", y = "Stay (days)", 
+       title = "Stay vs Tabby Color") +
+  theme_minimal()
+```
+
+
+### 4. Occupancy
+I created a new dataframe that to analyze the shelter's occupancy over a timeline. The histogram displays the occupancy of the shelter over time, color coded by if they were a returning animals (black), or new animals (blue) and their reason for entry. The peaks and dips are boxed in red. 
+Although no GLM modeling decisions will be implemented from this analysis, the patterns I noticed...
+
+- Most peaks are between May and July, with stray animals being the largest source of entrance.
+- Most dips are between Feburary and April, with adoption being the largest source of leaving.
+...are useful for the recommendations.
+
+```{r}
+occupancy_long_in$reason <- factor(occupancy_long_in$reason, 
+                                levels = c("in.reason_assist", "in.reason_surrender", "in.reason_stray", "in.reason_returning"))
+
+ggplot(occupancy_long_in, aes(x = date, y = count, fill = reason)) +
+  geom_bar(stat = "identity", color = ifelse(occupancy_long_in$peak_dip %in% c("Peak", "Dip"), "red", NA), linewidth = 0.8) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_x_date(date_breaks = "3 month", date_labels = "%b %Y") + 
+  scale_fill_manual(values = c("lightblue", "skyblue", "blue", "black")) +
+  labs(title = "Shelter Occupancy")
+```
+
+# Task 3
+## Issues with variable "Breed"
+The "Breed" variable has too many levels (due to poor data collection) to be included in the model. Of those levels, there are 277 unique breeds. Ideally, we would consolidate the breeds into larger groups based on commonalities, but without specific domain knowledge about breeds, this categorization is difficult. Instead, I looked at the median length of stay for each breed, and noticed that the "domestic" breed has one of the greatest differences from the median length of stay, while maintaining a large enough sample size. I also examined unique records of "domestic" to make sure that the categorization was meaningful. Therefore, a solution could be to utilize a binary predictor like "domestic" for the model. 
+
+```{r}
+head(breed_df[breed_df$PosPercent > 1, ][order(-breed_df$StayDiff[breed_df$PosPercent > 1]), ])
+head(unique(dat$breed[grepl("domestic", dat$breed, ignore.case = TRUE)]), 10)
+```
+
+```{r}
+ggplot(dat_no_out, aes_string(x = "domestic", y = "stay")) + 
+  geom_boxplot() +
+  scale_x_discrete(labels = c("0" = "No", "1" = "Yes")) +
+  labs(x = "Breed Contains Domestic", y = "Stay (days)", 
+       title = "Stay vs Domestic Breed") +
+  theme_minimal()
+```
+
+# Task 4
+## Distribution Analysis
+The choice of GLM depends on the relationship between the mean and variance in your data. Identifying whether the data is equidispersed, underdispersed, or overdispersed helps in selecting the right model. - Data Type: The response variable "length of stay" indicates the length of stay (measured in days) an animal remained in the shelter. This is a discrete numeric (aka. count) variable. 
+- Skew: The histogram indicates that stay is right skewed.
+- Dispersion: variance > mean 
+```{r}
+ggplot(dat, aes(x = stay)) +
+  geom_histogram(binwidth = 5) + 
+  labs(title = "Histogram of Stay",
+       x = "Stay",
+       y = "Frequency") +
+  theme_minimal()  
+
+cat("variance", var(dat$stay), "\n")
+cat("mean", mean(dat$stay), "\n")
+```
+
+# Task 5
+## Distribution Recommendation
+A Poisson distribution is used for count data with a fixed mean-variance relationship. In our data, variance of stay is greater than mean, therefore, using a Poisson distribution would be inappropriate. Instead, I would recommend the Negative Binomial distribution from the exponential dispersion family. This fits our data the best because it accounts for overdispersed count data (where variance is greater than the mean). 
+
+# Task 6
+## Model Fitting
+```{r}
+mod <- glm.nb(stay ~ 
+                outcome + 
+                animal + 
+                mf + 
+                age + 
+                out.year + 
+                in.reason + 
+                out.intact + 
+                born_in_shelter + 
+                tabby + 
+                domestic,
+              data = dat)
+
+summary(mod)
+```
+## Feature Selection using Stepwise BIC
+```{r}
+stepwise_mod <- step(mod, direction = "both", k = log(nobs(mod)))
+```
+
+## Diagnostic Analysis
+```{r}
+# RESIDUALS VS FITTED (Linearity of Predictors & Independence of Errors Assumption)
+# 3 points that have high residuals (16987, 41701, 22382)
+# most points have residuals close to 0 --> (independent) predictors have linear relationship with stay
+plot(stepwise_mod, which = 1) 
+
+# Q-Q RESIDUALS (Normality of Residuals Assumption)
+# majority of data accounted for in negative binomial distribution
+  # *top deviates --> data slightly more right-skewed than what negative binomial distribution accounts for (16987, 41701, 22382)
+plot(stepwise_mod, which = 2) 
+
+# SCALE-LOCATION (Homoscedasticity Assumption)
+# no DISTINCT relationship between between variance and predicted values --> indicates homoscedasticity
+  # *larger variation when predicted values are around 1 and 3.5 (16987, 41701, 22382)
+  # *smaller variation when predicted values are around 1.5 and 5
+plot(stepwise_mod, which = 3) 
+
+# COOK'S DISTANCE
+# 3 points with high cook's distances (16987, 41701, 22382), but not influential (cook’s distance > 1)
+plot(stepwise_mod, which = 4) 
+
+# RESIDUAL'S VS LEVERAGE 
+# some points with high residuals, but low leverage
+# some points with low residuals, but high leverage (16987, 41701, 22382)
+plot(stepwise_mod, which = 5) 
+
+# COOK'S DIST VS LEVERAGE
+# some points with high leverage, but low cook's distances
+# some points with low leverage, but high cook's distances (16987, 41701, 22382)
+plot(stepwise_mod, which = 6) 
+
+# MULTICOLLINEARITY (No Multicollinearity Assumption)
+# animal and domestic predictors have high multicollinearity
+vif(stepwise_mod)
+```
+
+## Model Refitting
+```{r}
+# removing outliers from data (obtained from diagnostic analysis)
+cleaned_dat <- dat[-c(16987, 41701, 22382), ]
+
+# removing predictor "domestic" from fitting (due to high multicollinearity)
+cleaned_stepwise_mod <- glm.nb(stay ~ 
+                outcome + 
+                animal + 
+                age + 
+                out.year + 
+                in.reason + 
+                out.intact,
+              data = cleaned_dat)
+
+summary(cleaned_stepwise_mod)
+```
+
+# Task 7
+## Model Interpretation
+
+### Equation
+ln(E(stay)) = -1.218e+02 - 2.624e+00*outcome_return - 6.851e-01*outcome_transfer - 3.498e-01*animal_dog + 3.147e-02*age + 6.220e-02*out.year + 1.075e+00*reason_assist + 1.163e-01*reason_stray - 5.886e-01*out.intact_yes
+
+### Dummy Variables
+Where...
+outcome_return = {1 if animal was returned to its original owner
+                  0 if otherwise}
+                  
+outcome_transfer = {1 if animal was transferred to another facility
+                    0 if otherwise}
+
+animal_dog = {1 if animal is a dog
+              0 if animal is a cat}
+              
+reason_assist = {1 if animal was brought through public assist
+                 0 if otherwise}
+
+reason_stray = {1 if animal was brought in as a stray
+                0 if otherwise}
+
+out.intact_yes = {1 if animal leaves fertile
+                  0 if animal leaves infertile}
+
+
+### Interpretations
+1. Animals who are returned to their owner have an average length of stay that is exp(-2.624e+00) times shorter than animals who are adopted, controlling all other variables.
+2. Animals who are transferred to another facility have an average length of stay that is exp(-6.851e-01) times shorter than animals who are adopted, controlling all other variables.
+3. Dogs have an average length of stay that is exp(-3.498e-01) times shorter than cats, controlling all other variables.
+4. For every additional year increase in animal's age entering the shelter, their estimated length of stay increases by a factor of exp(3.147e-02), controlling for all other variables. 
+5. For every additional year increase in animal's date leaving the shelter, their estimated length of stay increases by a factor of exp(6.220e-02), controlling for all other variables. 
+6. Animals who are brought in through animal assistance have an average length of stay that is exp(1.075e+00) times greater than animals who were surrendered, controlling all other variables.
+7. Animals who enter the shelter as a stray animal have an average length of stay that is exp(1.163e-01) times greater than animals who were surrendered, controlling all other variables.
+8. Animals who leave fertile have an average length of stay that is exp(-5.886e-01) times shorter than animals who leave infertile, controlling all other variables.
+
+### Summarized Interpretations
+1. Animals who are returned to their owners have on average shorter stays than animals who get adopted.
+2. Animals who get transferred to other facilities have on average shorter stays than animals who get adopted.
+3. Dogs have on average shorter says than cats.
+4. Animals who enter the shelter older have on average longer stays.
+5. Over the years, animals have been on average staying longer in the system.
+6. Animals admitted due to public assistance have on average longer stays than surrendered animals.
+7. Animals admitted as strays have on average longer stays than animals than surrendered animals.
+8. Animals who leave the shelter fertile have shorter stays than animals who leave infertile. 
+
+# Task 8
+## Overview
+Paws LLC has been facing an increasing length of stay for animals, especially those that are older, have specific health needs, or are considered less desirable by potential adopters. This trend is impacting their ability to move animals through the shelter efficiently and could affect our overall capacity. Understanding these patterns in animal intake and outcome will help us make better decisions to address these challenges.
+
+## Key Findings:
+1. Animals Stay Longer If They Are Older or Have Health Issues: Older animals, especially cats, tend to stay in the shelter longer. Animals brought in through public assistance (often due to abuse or neglect) also require more care, which can lead to extended stays. These animals are often harder to adopt due to their age or health condition.
+2. Adoption is the Largest Source of Animal Exits: Adoption is the main reason animals leave the shelter, but these animals are often the ones that have been here the longest. This suggests that we need to prioritize efforts on finding homes for these animals, as they have already waited longer for a chance at a new home.
+3. Seasonal Patterns: Animal intake peaks from May to July, largely due to an increase in stray animals. However, adoption rates dip from February to April. This seasonal variation in intake and adoption requires us to plan our resources and efforts more effectively during peak and off-peak times.
+
+## Recommendations:
+1. Prioritize Older Animals and Cats Needing New Homes: Animals returned to their owners typically have shorter stays, as their owners are already looking for them. To optimize resources, we should prioritize animals needing new homes, as they often take longer to adopt. Older animals, particularly cats, tend to stay in the shelter the longest, so it's important to focus marketing efforts on promoting them. Campaigns could highlight the benefits of adopting older pets, such as their calm demeanor, and emphasize traits specific to cats, like their independent nature. These efforts can target potential adopters seeking both older animals and cats as experienced, low-maintenance companions.
+
+2. Increase Adoption Efforts During Peak Occupancy Times: With occupancy highest between May and July, it’s crucial to ramp up adoption efforts during these months to prevent overcrowding and the need to transfer animals out due to lack of space. This could include hosting special adoption events, increasing social media outreach, and collaborating with local businesses or other shelters. By planning ahead, we can help ensure that animals find homes more quickly.
+```{r, echo=FALSE}
+ggplot(occupancy_long_in, aes(x = date, y = count, fill = reason)) +
+  geom_bar(stat = "identity", color = ifelse(occupancy_long_in$peak_dip %in% c("Peak", "Dip"), "red", NA), linewidth = 0.8) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_x_date(date_breaks = "3 month", date_labels = "%b %Y") + 
+  scale_fill_manual(values = c("lightblue", "skyblue", "blue", "black")) +
+  labs(title = "Shelter Occupancy")
+```
+
+3. Improve Health of Animals: Public assistance animals (often brought in due to abuse or neglect), and animals that leave the shelter infertile, face longer stays, as these factors can be associated with overall health challenges. Animals in poor health conditions are typically less desirable for adoption. Programs focused on improving their health—such as medical treatment like vaccinations can help increase their chances of adoption. Keeping these animals healthy and fertile not only improves their well-being but also makes it easier to find them suitable homes.
+```{r, echo=FALSE}
+ggplot(dat_no_out, aes_string(x = "out.intact", y = "stay")) + 
+  geom_boxplot() +
+  labs(x = "Fertility when Leaving", y = "Stay (days)", 
+       title = "Stay vs. Fertility when Leaving") +
+  scale_x_discrete(labels = c("0" = "Not Fertile", "1" = "Fertile")) +  
+  theme_minimal()
+```
+
+
